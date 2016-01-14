@@ -133,6 +133,7 @@ static int sockaddr_set_ipv4(const char * ip,
 	    || strcmp(ip, "0.0.0.0") == 0
 	    || strcmp(ip, "*") == 0
 	    || strcmp(ip, "any") == 0) {
+		ip = "0.0.0.0";
 		nIP = htonl(INADDR_ANY);
 	} else if (strcmp(ip, "localhost") == 0) {
 		char tmp[] = "127.0.0.1";
@@ -196,6 +197,7 @@ finished:
 
 static int lua__common_recvfrom(lua_State *L)
 {
+	int is_ipv6 = 0;
 	char buffer[BUFFER_SIZE];
 	char remote_host[INET6_ADDRSTRLEN + 1];
 	int remote_family;
@@ -204,20 +206,25 @@ static int lua__common_recvfrom(lua_State *L)
 	const char *addrstr = luaL_optstring(L, 3, "");
 	int port = luaL_optinteger(L, 4, 0);
 	int remote_port = port;
-	struct sockaddr_in addr;
-	struct sockaddr_in *addr_ptr = NULL;
+	// struct sockaddr_in addr;
+	struct sockaddr_storage addr;
+	struct sockaddr *addr_ptr = NULL;
 	socklen_t sockaddr_len = 0;
 	ssize_t recvlen;
 
 
 	if (port > 0 && strcmp(addrstr, "") != 0) {
-		if (sockaddr_set_ipv6(addrstr, port, (struct sockaddr_in6 *)&addr)) {
-			sockaddr_set_ipv4(addrstr, port, &addr);
+		if (sockaddr_set_ipv4(addrstr, port, (struct sockaddr_in *)&addr) <= 0) {
+			is_ipv6 = 1;
+			sockaddr_len = sizeof(struct sockaddr_in6);
+			sockaddr_set_ipv6(addrstr, port, (struct sockaddr_in6 *)&addr);
+		} else {
+			sockaddr_len = sizeof(struct sockaddr_in);
 		}
-		addr_ptr = &addr;
+		addr_ptr = (struct sockaddr *)&addr;
 	} else {
-		addr_ptr = &addr;
-		sockaddr_len = sizeof(addr);
+		addr_ptr = (struct sockaddr *)&addr;
+		sockaddr_len = sizeof(struct sockaddr_in6);
 	}
 
 	if (p == NULL || p->fd < 0 || !luac__isobj(L, 1)) {
@@ -256,23 +263,25 @@ static int lua__common_recvfrom(lua_State *L)
 
 static int lua__common_sendto(lua_State *L)
 {
+	int is_ipv6 = 0;
 	size_t sz;
 	udp_sock_t *p = *(udp_sock_t **)lua_touserdata(L, 1);
 	const char * buffer = luaL_checklstring(L, 2, &sz);
 	int flags = luaL_optinteger(L, 3, 0); /* NONE */
 	const char *addrstr = luaL_optstring(L, 4, "");
 	int port = luaL_optinteger(L, 5, 0);
-	struct sockaddr_in addr;
-	struct sockaddr_in *addr_ptr = NULL;
-	socklen_t sockaddr_len = 0;
+	// struct sockaddr_in addr;
+	struct sockaddr_storage addr;
+	socklen_t sockaddr_len = sizeof(struct sockaddr_in6);
+	struct sockaddr *addr_ptr = NULL;
 	ssize_t sendlen;
 
 	if (port > 0 && strcmp(addrstr, "") != 0) {
-		if (sockaddr_set_ipv6(addrstr, port, (struct sockaddr_in6 *)&addr)) {
-			sockaddr_set_ipv4(addrstr, port, &addr);
+		if (sockaddr_set_ipv4(addrstr, port, (struct sockaddr_in *)&addr) <= 0) {
+			is_ipv6 = 1;
+			sockaddr_len = sizeof(struct sockaddr_in6);
+			sockaddr_set_ipv6(addrstr, port, (struct sockaddr_in6*)&addr);
 		}
-		addr_ptr = &addr;
-		sockaddr_len = sizeof(addr);
 	}
 
 	if (p == NULL || p->fd < 0 || !luac__isobj(L, 1)) {
@@ -337,7 +346,10 @@ static int lua__common_bind(lua_State *L)
 {
 	int fd;
 	int bindret;
-	struct sockaddr_in addr;
+	int is_ipv6 = 0;
+	// struct sockaddr_in addr;
+	struct sockaddr_storage addr;
+	socklen_t sockaddr_len = sizeof(struct sockaddr_in6);
 	udp_sock_t * p = *(udp_sock_t **)lua_touserdata(L, 1);
 	const char *addrstr = luaL_optstring(L, 2, "0.0.0.0");
 	int port = luaL_checkinteger(L, 3);
@@ -347,10 +359,15 @@ static int lua__common_bind(lua_State *L)
 		lua_pushfstring(L, "server or client obj not found,fd=%d", fd);
 		return 2;
 	}
-	if (sockaddr_set_ipv6(addrstr, port, (struct sockaddr_in6 *)&addr)) {
-		sockaddr_set_ipv4(addrstr, port, &addr);
+	if (sockaddr_set_ipv4(addrstr, port, (struct sockaddr_in *)&addr) <= 0) {
+		is_ipv6 = 1;
+		sockaddr_len = sizeof(struct sockaddr_in6);
+		sockaddr_set_ipv6(addrstr, port, (struct sockaddr_in6*)&addr);
+	} else {
+		sockaddr_len = sizeof(struct sockaddr_in);
 	}
-	bindret = bind(p->fd, (const struct sockaddr *)&addr, sizeof(addr));
+	fprintf(stderr, "is_ipv6: %d\n", is_ipv6);
+	bindret = bind(p->fd, (const struct sockaddr *)&addr, sockaddr_len);
 	if (bindret < 0) {
 		lua_pushnil(L);
 #if (defined(WIN32) || defined(_WIN32))
