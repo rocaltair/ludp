@@ -30,6 +30,7 @@ static void startup()
 #else
 # include <sys/types.h>
 # include <sys/socket.h>
+# include <net/if.h>
 # include <netinet/in.h>
 # include <errno.h>
 # include <unistd.h>
@@ -89,27 +90,60 @@ typedef struct udp_sock_s {
 	CONV_FUNC_MAP(XX)
 #undef XX
 
-static int sockaddr_set(const char * addrstr,
+static int sockaddr_set_ipv6(const char* ip,
+			     int port,
+			     struct sockaddr_in6* addr)
+{
+	char address_part[40];
+	size_t address_part_size;
+	const char* zone_index;
+
+	memset(addr, 0, sizeof(*addr));
+	addr->sin6_family = AF_INET6;
+	addr->sin6_port = htons(port);
+
+	zone_index = strchr(ip, '%');
+	if (zone_index != NULL) {
+		address_part_size = zone_index - ip; 
+		if (address_part_size >= sizeof(address_part))
+			address_part_size = sizeof(address_part) - 1;
+
+		memcpy(address_part, ip, address_part_size);
+		address_part[address_part_size] = '\0';
+		ip = address_part;
+
+		zone_index++; /* skip '%' */
+		/* NOTE: unknown interface (id=0) is silently ignored */
+#ifdef _WIN32
+		addr->sin6_scope_id = atoi(zone_index);
+#else
+		addr->sin6_scope_id = if_nametoindex(zone_index);
+#endif
+	}
+	return inet_pton(AF_INET6, ip, &addr->sin6_addr);
+}
+
+static int sockaddr_set_ipv4(const char * ip,
 		      int port,
 		      struct sockaddr_in * addr)
 {
 	int nIP = 0;
-	if (!addrstr || *addrstr == '\0' 
-	    || strcmp(addrstr, "0") == 0
-	    || strcmp(addrstr, "0.0.0.0") == 0
-	    || strcmp(addrstr, "*") == 0
-	    || strcmp(addrstr, "any") == 0) {
+	if (!ip || *ip == '\0' 
+	    || strcmp(ip, "0") == 0
+	    || strcmp(ip, "0.0.0.0") == 0
+	    || strcmp(ip, "*") == 0
+	    || strcmp(ip, "any") == 0) {
 		nIP = htonl(INADDR_ANY);
-	} else if (strcmp(addrstr, "localhost") == 0) {
+	} else if (strcmp(ip, "localhost") == 0) {
 		char tmp[] = "127.0.0.1";
 		nIP = inet_addr((const char *)tmp);
 	} else {
-		nIP = inet_addr(addrstr);
+		nIP = inet_addr(ip);
 	}
 	addr->sin_addr.s_addr = nIP;
 	addr->sin_family = AF_INET;
 	addr->sin_port = htons(port);
-	return 0;
+	return inet_pton(AF_INET, ip, &(addr->sin_addr.s_addr));
 }
 
 static void sockaddr_get(const struct sockaddr_storage *address,
@@ -177,7 +211,9 @@ static int lua__common_recvfrom(lua_State *L)
 
 
 	if (port > 0 && strcmp(addrstr, "") != 0) {
-		sockaddr_set(addrstr, port, &addr);
+		if (sockaddr_set_ipv6(addrstr, port, (struct sockaddr_in6 *)&addr)) {
+			sockaddr_set_ipv4(addrstr, port, &addr);
+		}
 		addr_ptr = &addr;
 	} else {
 		addr_ptr = &addr;
@@ -232,7 +268,9 @@ static int lua__common_sendto(lua_State *L)
 	ssize_t sendlen;
 
 	if (port > 0 && strcmp(addrstr, "") != 0) {
-		sockaddr_set(addrstr, port, &addr);
+		if (sockaddr_set_ipv6(addrstr, port, (struct sockaddr_in6 *)&addr)) {
+			sockaddr_set_ipv4(addrstr, port, &addr);
+		}
 		addr_ptr = &addr;
 		sockaddr_len = sizeof(addr);
 	}
@@ -309,7 +347,9 @@ static int lua__common_bind(lua_State *L)
 		lua_pushfstring(L, "server or client obj not found,fd=%d", fd);
 		return 2;
 	}
-	sockaddr_set(addrstr, port, &addr);
+	if (sockaddr_set_ipv6(addrstr, port, (struct sockaddr_in6 *)&addr)) {
+		sockaddr_set_ipv4(addrstr, port, &addr);
+	}
 	bindret = bind(p->fd, (const struct sockaddr *)&addr, sizeof(addr));
 	if (bindret < 0) {
 		lua_pushnil(L);
