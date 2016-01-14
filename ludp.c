@@ -136,8 +136,8 @@ static int sockaddr_set_ipv4(const char * ip,
 		ip = "0.0.0.0";
 		nIP = htonl(INADDR_ANY);
 	} else if (strcmp(ip, "localhost") == 0) {
-		char tmp[] = "127.0.0.1";
-		nIP = inet_addr((const char *)tmp);
+		ip = "127.0.0.1";
+		nIP = inet_addr((const char *)ip);
 	} else {
 		nIP = inet_addr(ip);
 	}
